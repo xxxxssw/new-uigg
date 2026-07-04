@@ -807,7 +807,7 @@ local function makeGroup(parent, title)
         Parent = outer
     })
     local layout = Utility:AddList(content, 6)
-    layout.HorizontalAlignment = Enum.HorizontalAlignment.Stretch
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
     Utility:AddPadding(content, 0, 0, 0, 8)
 
     group.Container = outer
@@ -824,7 +824,7 @@ local function makeColumn(parent)
         Parent = parent
     })
     local layout = Utility:AddList(column, 8)
-    layout.HorizontalAlignment = Enum.HorizontalAlignment.Stretch
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
     return column
 end
 
@@ -1245,7 +1245,7 @@ function GroupMethods:AddDropdown(index, info)
     })
     Library:RegisterTheme(list, { ScrollBarImageColor3 = "Accent" })
     local listLayout = Utility:AddList(list, 3)
-    listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Stretch
+    listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
     Utility:AutoCanvas(list, listLayout, 4)
     addTooltip(info.Tooltip, button)
 
@@ -1675,7 +1675,7 @@ function GroupMethods:AddDependencyBox()
     Utility:AddStroke(container, "Outline", 1)
     Utility:AddPadding(container, 8, 8, 8, 8)
     local layout = Utility:AddList(container, 6)
-    layout.HorizontalAlignment = Enum.HorizontalAlignment.Stretch
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
     local box = setmetatable({
         Container = container,
         Content = container,
@@ -1733,7 +1733,7 @@ function TabBoxMethods:AddTab(name)
         Visible = false,
         Parent = self.Container
     })
-    Utility:AddList(page, 6).HorizontalAlignment = Enum.HorizontalAlignment.Stretch
+    Utility:AddList(page, 6).HorizontalAlignment = Enum.HorizontalAlignment.Left
     tab.Container = page
     tab.Content = page
     tab.Layout = page:FindFirstChildOfClass("UIListLayout")
