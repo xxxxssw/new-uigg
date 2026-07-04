@@ -42,6 +42,7 @@ local Library = {
     Notifications = {},
     DependencyBoxes = {},
     OpenFrames = {},
+    OpenFrameOwners = {},
     Unloaded = false,
     NotifyOnError = true,
     ToggleKeybind = nil,
@@ -223,6 +224,15 @@ end
 local function getMouseLocation()
     local location = UserInputService:GetMouseLocation()
     return Vector2.new(location.X, location.Y)
+end
+
+local function isPointInsideGuiObject(object, point)
+    if not object or not object.Parent or not object.Visible then
+        return false
+    end
+    local pos = object.AbsolutePosition
+    local size = object.AbsoluteSize
+    return point.X >= pos.X and point.X <= pos.X + size.X and point.Y >= pos.Y and point.Y <= pos.Y + size.Y
 end
 
 function Utility:Create(className, properties, children)
@@ -591,8 +601,14 @@ function Library:OnUnload(callback)
 end
 
 function Library:AttemptSave()
-    if self.SaveManager and self.SaveManager.Save then
-        self.SaveManager:Save()
+    local saveManager = self.SaveManager
+    if not saveManager or saveManager.Loading or not saveManager.AutoSave then
+        return
+    end
+    if saveManager.QueueSave then
+        saveManager:QueueSave()
+    elseif saveManager.Save then
+        saveManager:Save(nil, true)
     end
 end
 
@@ -617,11 +633,12 @@ function Library:Unload()
     end
 end
 
-function Library:SetOpen(frame, open)
+function Library:SetOpen(frame, open, owner)
     if not frame then
         return
     end
     self.OpenFrames[frame] = open and true or nil
+    self.OpenFrameOwners[frame] = open and owner or nil
 end
 
 function Library:CloseOpenFrames(except)
@@ -629,6 +646,7 @@ function Library:CloseOpenFrames(except)
         if frame ~= except and frame.Parent then
             frame.Visible = false
             self.OpenFrames[frame] = nil
+            self.OpenFrameOwners[frame] = nil
         end
     end
 end
@@ -1175,10 +1193,17 @@ end
 local function normalizeDropdownValue(info, value)
     local values = info.Values or {}
     if info.Multi then
-        if type(value) == "table" then
-            return value
-        end
         local selected = {}
+        if type(value) == "table" then
+            for key, enabled in pairs(value) do
+                if type(key) == "number" and enabled ~= false then
+                    selected[tostring(enabled)] = true
+                elseif enabled == true then
+                    selected[tostring(key)] = true
+                end
+            end
+            return selected
+        end
         if value ~= nil then
             selected[tostring(value)] = true
         end
@@ -1286,6 +1311,7 @@ function GroupMethods:AddDropdown(index, info)
             object.OptionButtons[key] = nil
         end
         for _, item in ipairs(object.Values) do
+            local itemKey = tostring(item)
             local itemButton = Utility:TextButton({
                 Text = tostring(item),
                 TextXAlignment = Enum.TextXAlignment.Left,
@@ -1297,14 +1323,14 @@ function GroupMethods:AddDropdown(index, info)
             Library:RegisterTheme(itemButton, { BackgroundColor3 = "PanelLight", TextColor3 = "Text" })
             Utility:AddCorner(itemButton, 3)
             Utility:AddPadding(itemButton, 7, 0, 7, 0)
-            object.OptionButtons[item] = itemButton
+            object.OptionButtons[itemKey] = itemButton
             Utility:Connect(itemButton.MouseButton1Click, function()
                 if object.Multi then
                     local newValue = {}
                     for key, enabled in pairs(object.Value or {}) do
                         newValue[key] = enabled
                     end
-                    newValue[item] = not newValue[item]
+                    newValue[itemKey] = not newValue[itemKey]
                     object:SetValue(newValue)
                 else
                     object:SetValue(item)
@@ -1317,8 +1343,8 @@ function GroupMethods:AddDropdown(index, info)
 
     local function refreshSelectedVisuals()
         button.Text = "  " .. valueSummary(object.Value)
-        for item, itemButton in pairs(object.OptionButtons) do
-            local selected = object.Multi and object.Value and object.Value[item] == true or object.Value == item
+        for itemKey, itemButton in pairs(object.OptionButtons) do
+            local selected = object.Multi and object.Value and object.Value[itemKey] == true or tostring(object.Value) == itemKey
             itemButton.TextColor3 = selected and Library.Theme.Accent or Library.Theme.Text
         end
     end
@@ -1350,7 +1376,7 @@ function GroupMethods:AddDropdown(index, info)
         local visible = not popup.Visible
         Library:CloseOpenFrames(popup)
         popup.Visible = visible
-        Library:SetOpen(popup, visible)
+        Library:SetOpen(popup, visible, button)
         if visible then
             local abs = button.AbsolutePosition
             popup.Position = UDim2.fromOffset(abs.X, abs.Y + button.AbsoluteSize.Y + 4)
@@ -1531,7 +1557,7 @@ function LabelMethods:AddColorPicker(index, info)
         local visible = not popup.Visible
         Library:CloseOpenFrames(popup)
         popup.Visible = visible
-        Library:SetOpen(popup, visible)
+        Library:SetOpen(popup, visible, pickerButton)
         if visible then
             local abs = pickerButton.AbsolutePosition
             popup.Position = UDim2.fromOffset(abs.X - popup.AbsoluteSize.X + pickerButton.AbsoluteSize.X, abs.Y + 24)
@@ -2130,9 +2156,8 @@ Utility:Connect(UserInputService.InputBegan, function(input)
             local mouse = getMouseLocation()
             for frame in pairs(Library.OpenFrames) do
                 if frame.Parent and frame.Visible then
-                    local pos = frame.AbsolutePosition
-                    local size = frame.AbsoluteSize
-                    local inside = mouse.X >= pos.X and mouse.X <= pos.X + size.X and mouse.Y >= pos.Y and mouse.Y <= pos.Y + size.Y
+                    local owner = Library.OpenFrameOwners[frame]
+                    local inside = isPointInsideGuiObject(frame, mouse) or isPointInsideGuiObject(owner, mouse)
                     if not inside then
                         frame.Visible = false
                         Library:SetOpen(frame, false)
