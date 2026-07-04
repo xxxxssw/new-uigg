@@ -1,4 +1,4 @@
-local repo = "https://raw.githubusercontent.com/OWNER/UniversalESPLib/main/"
+local repo = "https://github.com/xxxxssw/new-uigg/blob/main/UniversalESPLib/"
 
 local ESP = loadstring(game:HttpGet(repo .. "Library.lua"))()
 
