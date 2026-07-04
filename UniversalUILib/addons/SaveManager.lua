@@ -3,7 +3,11 @@ local SaveManager = {
     Folder = "UniversalUILib",
     IgnoreIndexes = {},
     MemoryConfigs = {},
-    CurrentConfig = nil
+    CurrentConfig = nil,
+    AutoSave = false,
+    AutoSaveDelay = 2,
+    AutoSaveQueued = false,
+    Loading = false
 }
 
 local function safeName(value)
@@ -73,6 +77,33 @@ end
 function SaveManager:SetFolder(folder)
     self.Folder = tostring(folder or self.Folder)
     return self
+end
+
+function SaveManager:SetAutoSave(enabled, delay)
+    self.AutoSave = enabled == true
+    if delay ~= nil then
+        self.AutoSaveDelay = math.max(0.25, tonumber(delay) or self.AutoSaveDelay)
+    end
+    return self
+end
+
+function SaveManager:QueueSave(name)
+    assert(self.Library, "SaveManager:SetLibrary must be called first")
+    if not self.AutoSave or self.Loading then
+        return false
+    end
+    self.PendingAutoSaveName = safeName(name or self.CurrentConfig or "default")
+    if self.AutoSaveQueued then
+        return false
+    end
+    self.AutoSaveQueued = true
+    task.delay(self.AutoSaveDelay, function()
+        self.AutoSaveQueued = false
+        if self.AutoSave and not self.Loading then
+            self:Save(self.PendingAutoSaveName, true)
+        end
+    end)
+    return true
 end
 
 function SaveManager:GetConfigFolder()
@@ -183,6 +214,7 @@ function SaveManager:ApplyData(data)
     if type(data) ~= "table" then
         return false
     end
+    self.Loading = true
     for index, value in pairs(data.Toggles or {}) do
         local toggle = self.Library.Toggles[index]
         if toggle and toggle.SetValue and not self:ShouldIgnore(index) then
@@ -213,10 +245,11 @@ function SaveManager:ApplyData(data)
             end
         end
     end
+    self.Loading = false
     return true
 end
 
-function SaveManager:Save(name)
+function SaveManager:Save(name, silent)
     assert(self.Library, "SaveManager:SetLibrary must be called first")
     name = safeName(name or self.CurrentConfig or "default")
     self.CurrentConfig = name
@@ -227,7 +260,9 @@ function SaveManager:Save(name)
         ensureFolder(self:GetConfigFolder())
         writefile(self:GetConfigPath(name), self.Library:JSONEncode(data))
     end
-    self.Library:Notify("Saved config: " .. name, 3, "Save Manager")
+    if not silent then
+        self.Library:Notify("Saved config: " .. name, 3, "Save Manager")
+    end
     if self.ConfigDropdown then
         self.ConfigDropdown:SetValues(self:GetConfigNames())
         self.ConfigDropdown:SetValue(name, true)
