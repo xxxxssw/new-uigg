@@ -43,6 +43,7 @@ local Library = {
     DependencyBoxes = {},
     OpenFrames = {},
     OpenFrameOwners = {},
+    PopupBlocker = nil,
     Unloaded = false,
     NotifyOnError = true,
     ToggleKeybind = nil,
@@ -633,22 +634,65 @@ function Library:Unload()
     end
 end
 
+function Library:RefreshPopupBlocker()
+    local hasOpenFrame = false
+
+    for frame in pairs(self.OpenFrames) do
+        if frame and frame.Parent and frame.Visible then
+            hasOpenFrame = true
+        else
+            self.OpenFrames[frame] = nil
+            self.OpenFrameOwners[frame] = nil
+        end
+    end
+
+    if hasOpenFrame and (not self.PopupBlocker or not self.PopupBlocker.Parent) then
+        local blocker = Utility:TextButton({
+            Name = "PopupInputBlocker",
+            BackgroundTransparency = 1,
+            Text = "",
+            AutoButtonColor = false,
+            Active = true,
+            Modal = true,
+            Size = UDim2.fromScale(1, 1),
+            Position = UDim2.fromOffset(0, 0),
+            ZIndex = 2400,
+            Visible = false,
+            Parent = self:GetScreenGui()
+        })
+
+        Utility:Connect(blocker.MouseButton1Click, function()
+            self:CloseOpenFrames()
+        end)
+
+        self.PopupBlocker = blocker
+    end
+
+    if self.PopupBlocker then
+        self.PopupBlocker.Visible = hasOpenFrame
+    end
+end
+
 function Library:SetOpen(frame, open, owner)
     if not frame then
         return
     end
     self.OpenFrames[frame] = open and true or nil
     self.OpenFrameOwners[frame] = open and owner or nil
+    self:RefreshPopupBlocker()
 end
 
 function Library:CloseOpenFrames(except)
     for frame in pairs(self.OpenFrames) do
-        if frame ~= except and frame.Parent then
-            frame.Visible = false
+        if frame ~= except then
+            if frame.Parent then
+                frame.Visible = false
+            end
             self.OpenFrames[frame] = nil
             self.OpenFrameOwners[frame] = nil
         end
     end
+    self:RefreshPopupBlocker()
 end
 
 function Library:UpdateDependencyBoxes()
@@ -1242,13 +1286,17 @@ function GroupMethods:AddDropdown(index, info)
     local arrow = Utility:TextLabel({
         Text = "v",
         Size = UDim2.fromOffset(18, 24),
-        Position = UDim2.new(1, -20, 0, 22),
+        Position = UDim2.new(1, 4, 0, 0),
         TextXAlignment = Enum.TextXAlignment.Center,
-        Parent = container
+        Active = false,
+        Selectable = false,
+        ZIndex = button.ZIndex + 1,
+        Parent = button
     })
     local popup = Utility:Frame({
         Name = safeName(index) .. "_Dropdown",
         Visible = false,
+        Active = true,
         Size = UDim2.fromOffset(220, 120),
         BackgroundColor3 = Library.Theme.Main,
         Parent = Library:GetScreenGui(),
