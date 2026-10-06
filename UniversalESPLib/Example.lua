@@ -1,24 +1,32 @@
-local repo = "https://github.com/xxxxssw/new-uigg/blob/main/UniversalESPLib/"
+--[[
+    UniversalESPLib - full example
+    Loads the ESP, the UniversalUILib menu, the ESP menu bridge and config saving.
 
-local ESP = loadstring(game:HttpGet(repo .. "Library.lua"))()
+    Press RightControl to open the menu. Press the ESP keybind set in the menu to
+    toggle visuals without opening it.
+]]
 
--- Optional modules.
-local NPCProvider = loadstring(game:HttpGet(repo .. "modules/NPCProvider.lua"))()(ESP)
-local TagProvider = loadstring(game:HttpGet(repo .. "modules/TagProvider.lua"))()(ESP)
-local RadarFeature = loadstring(game:HttpGet(repo .. "modules/RadarFeature.lua"))()(ESP)
-local ConfigManager = loadstring(game:HttpGet(repo .. "addons/ConfigManager.lua"))()
+local base = "https://raw.githubusercontent.com/xxxxssw/new-uigg/main/"
+local espRepo = base .. "UniversalESPLib/"
+local uiRepo = base .. "UniversalUILib/"
 
-ConfigManager:SetLibrary(ESP)
-ConfigManager:SetFolder("UniversalESPLib")
+local function load(url)
+    return loadstring(game:HttpGet(url))()
+end
+
+-- ESP ----------------------------------------------------------------------
+local ESP = load(espRepo .. "Library.lua")
+local NPCProvider = load(espRepo .. "modules/NPCProvider.lua")(ESP)
 
 ESP:SetSettings({
-    Enabled = true,
     TeamCheck = false,
-    MaxDistance = 4500,
+    MaxDistance = 2500,
     Box = true,
     BoxStyle = "Corner",
+    BoxFill = true,
     Name = true,
     HealthBar = true,
+    HealthText = true,
     Distance = true,
     Tool = true,
     OffscreenArrows = true,
@@ -27,54 +35,70 @@ ESP:SetSettings({
     Tracer = false
 })
 
--- Starts player ESP by default.
 ESP:Start()
 
--- Optional: NPC ESP for non-player Humanoid models.
+-- Optional: NPC ESP for non-player Humanoid models (yellow, no health bar spam).
 NPCProvider:Start({
     Root = workspace,
     Type = "NPC",
     Color = Color3.fromRGB(255, 210, 90),
-    TrackFilter = function(model)
-        return model.Name ~= "IgnoreMe"
+    OffscreenArrows = false,
+    Tool = false
+})
+
+-- Menu ---------------------------------------------------------------------
+local Library = load(uiRepo .. "Library.lua")
+local ThemeManager = load(uiRepo .. "addons/ThemeManager.lua")
+local SaveManager = load(uiRepo .. "addons/SaveManager.lua")
+local Bridge = load(espRepo .. "addons/UILibBridge.lua")
+
+local Window = Library:CreateWindow({
+    Title = "Universal ESP",
+    Center = true,
+    AutoShow = true,
+    Size = Vector2.new(640, 560),
+    Keybind = "RightControl"
+})
+
+local Tabs = {
+    ESP = Window:AddTab("ESP"),
+    Settings = Window:AddTab("Settings")
+}
+
+Bridge:ApplyToTab(Tabs.ESP, ESP, { ToggleKey = "F2" })
+
+-- Settings tab: menu bind, unload, theme and configs.
+local Menu = Tabs.Settings:AddLeftGroupbox("Menu")
+Menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
+    Default = "RightControl",
+    NoUI = true,
+    Text = "Menu"
+})
+Menu:AddButton({
+    Text = "Unload",
+    DoubleClick = true,
+    Func = function()
+        ESP:Unload()
+        Library:Unload()
     end
 })
 
--- Optional: track anything tagged with CollectionService tag "Loot".
-TagProvider:Start({
-    Tag = "Loot",
-    Type = "Loot",
-    Color = Color3.fromRGB(120, 255, 160),
-    Name = "Loot"
-})
+Library.ToggleKeybind = Options.MenuKeybind
+Library:SetWatermark("Universal ESP")
+Library:SetWatermarkVisibility(true)
 
--- Optional: manual custom target.
-local importantPart = workspace:FindFirstChild("ImportantPart")
-if importantPart then
-    ESP:Track(importantPart, {
-        Type = "Objective",
-        Name = "Objective",
-        Color = Color3.fromRGB(255, 120, 255),
-        Box = true,
-        Distance = true,
-        Tracer = true
-    })
-end
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
+ThemeManager:SetFolder("UniversalESP")
+SaveManager:SetFolder("UniversalESP")
+ThemeManager:ApplyToTab(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
+SaveManager:LoadAutoloadConfig()
 
--- Optional: integrate with UniversalUILib.
---[[
-local uiRepo = "https://raw.githubusercontent.com/OWNER/UniversalUILib/main/"
-local Library = loadstring(game:HttpGet(uiRepo .. "Library.lua"))()
-local Bridge = loadstring(game:HttpGet(repo .. "addons/UILibBridge.lua"))()
+Library:OnUnload(function()
+    ESP:Unload()
+end)
 
-local Window = Library:CreateWindow({
-    Title = "ESP",
-    Center = true,
-    AutoShow = true
-})
-
-local Settings = Window:AddTab("ESP")
-Bridge:ApplyToTab(Settings, ESP)
-]]
-
-ConfigManager:LoadAutoload()
+Library:Notify("Loaded. RightControl opens the menu, F2 toggles ESP.", 5, "Universal ESP")
