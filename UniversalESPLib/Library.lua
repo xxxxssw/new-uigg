@@ -1,9 +1,14 @@
 --[[
-    UniversalESPLib
-    A standalone, modular Roblox Lua ESP library.
+    UniversalESPLib v2
+    A standalone, modular Roblox Luau ESP library with a clean, outlined visual style.
 
     Load with:
-    local ESP = loadstring(game:HttpGet("https://raw.githubusercontent.com/OWNER/REPO/main/Library.lua"))()
+    local ESP = loadstring(game:HttpGet("https://raw.githubusercontent.com/xxxxssw/new-uigg/main/UniversalESPLib/Library.lua"))()
+    ESP:Start()
+
+    Rendering uses the Drawing API when the executor provides it and falls back to
+    ScreenGui objects otherwise. Every shape is drawn twice (outline + main) so it
+    stays readable on any background.
 ]]
 
 local Players = game:GetService("Players")
@@ -24,8 +29,17 @@ end
 
 local Env = getgenvCompat()
 
+-- Draw order. Drawing ZIndex and GuiObject ZIndex both honour these.
+local Z = {
+    Fill = 1,
+    Outline = 2,
+    Main = 4,
+    Detail = 6,
+    Text = 8
+}
+
 local ESP = {
-    Version = "1.0.0",
+    Version = "2.0.0",
     Name = "UniversalESPLib",
     Enabled = false,
     Started = false,
@@ -47,57 +61,91 @@ local ESP = {
     Unloaded = false,
     CurrentRainbowHue = 0,
     Settings = {
+        -- General
         Enabled = true,
-        RenderMode = "Auto",
+        RenderMode = "Auto",          -- Auto | Drawing | Gui
         RefreshInterval = 0,
         ShowLocalPlayer = false,
+        ShowDead = false,
         TeamCheck = false,
-        UseTeamColor = true,
-        MaxDistance = 5000,
-        MinBoxSize = 4,
-        MaxBoxSize = 900,
-        TextSize = 13,
-        TextFont = 2,
-        TextOutline = true,
-        ScaleWithDistance = false,
+        UseTeamColor = false,
+        MaxDistance = 2500,
+        DistanceOrigin = "Character", -- Character | Camera
         FadeDistance = true,
+        FadeSpeed = 10,               -- how fast targets fade in/out (per second)
         Transparency = 1,
-        EnemyColor = Color3.fromRGB(255, 90, 90),
-        FriendlyColor = Color3.fromRGB(90, 190, 255),
-        NeutralColor = Color3.fromRGB(255, 255, 255),
-        TargetColor = Color3.fromRGB(255, 255, 255),
+        VisibleCheck = false,
+        VisibleCheckInterval = 0.08,
+
+        -- Text
+        TextSize = 13,
+        TextFont = 2,                 -- Drawing font id: 0 UI, 1 System, 2 Plex, 3 Monospace
+        TextOutline = true,
+        TextUseTargetColor = false,
+        ScaleWithDistance = true,
+        MinBoxSize = 4,
+        MaxBoxSize = 1200,
+
+        -- Colors
+        EnemyColor = Color3.fromRGB(255, 86, 86),
+        FriendlyColor = Color3.fromRGB(96, 165, 250),
+        NeutralColor = Color3.fromRGB(240, 240, 245),
+        VisibleColor = Color3.fromRGB(120, 255, 170),
+        TargetColor = Color3.fromRGB(240, 240, 245),
+        TextColor = Color3.fromRGB(255, 255, 255),
         OutlineColor = Color3.fromRGB(0, 0, 0),
+        Outline = true,
+
+        -- Box
         Box = true,
-        BoxStyle = "Corner",
+        BoxStyle = "Corner",          -- Corner | Full
+        BoxMode = "Precise",          -- Precise (body parts) | Fast (root part)
         BoxThickness = 1,
+        BoxFill = true,
+        BoxFillTransparency = 0.9,
         Box3D = false,
+
+        -- Labels
         Name = true,
         DisplayName = true,
         HealthBar = true,
-        HealthText = false,
+        HealthBarSide = "Left",       -- Left | Right
+        HealthBarWidth = 2,
+        HealthText = true,
+        HealthTextAlways = false,
         Distance = true,
         DistanceUnit = "m",
         Tool = true,
+
+        -- Extras
         Tracer = false,
-        TracerOrigin = "Bottom",
+        TracerOrigin = "Bottom",      -- Bottom | Center | Top | Mouse
+        TracerThickness = 1,
         Skeleton = false,
         SkeletonThickness = 1,
         Chams = false,
         ChamsOutline = true,
-        ChamsFillTransparency = 0.72,
+        ChamsFillTransparency = 0.6,
         ChamsOutlineTransparency = 0,
+        ChamsFillColor = nil,         -- nil = target color
+        ChamsOutlineColor = nil,      -- nil = target color
         OffscreenArrows = true,
-        ArrowRadius = 280,
-        ArrowSize = 16,
+        ArrowRadius = 300,
+        ArrowSize = 14,
         HeadDot = false,
         HeadDotRadius = 3,
         LookLine = false,
         LookLineLength = 8,
-        Rainbow = false
+        Rainbow = false,
+        RainbowSpeed = 1
     }
 }
 
 Env.UniversalESPLib = ESP
+
+---------------------------------------------------------------------------
+-- Utilities
+---------------------------------------------------------------------------
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -109,11 +157,11 @@ local function safeCallback(callback, ...)
     if type(callback) ~= "function" then
         return nil
     end
-    local ok, result = pcall(callback, ...)
+    local ok, a, b = pcall(callback, ...)
     if ok then
-        return result
+        return a, b
     end
-    warn("[UniversalESPLib] " .. tostring(result))
+    warn("[UniversalESPLib] " .. tostring(a))
     return nil
 end
 
@@ -149,9 +197,9 @@ local function colorToTable(color)
         return color
     end
     return {
-        R = math.floor(color.R * 255),
-        G = math.floor(color.G * 255),
-        B = math.floor(color.B * 255)
+        R = math.floor(color.R * 255 + 0.5),
+        G = math.floor(color.G * 255 + 0.5),
+        B = math.floor(color.B * 255 + 0.5)
     }
 end
 
@@ -174,22 +222,97 @@ local function tableToColor(value, fallback)
     return Color3.fromRGB(r, g, b)
 end
 
+local function looksLikeColor(value)
+    return type(value) == "table" and (value.R or value.r or value[1]) ~= nil and (value.B or value.b or value[3]) ~= nil
+end
+
 local function isPointInViewport(point, viewport)
     return point.X >= 0 and point.X <= viewport.X and point.Y >= 0 and point.Y <= viewport.Y
 end
 
-local function vector2FromViewport(vector)
-    return Vector2.new(vector.X, vector.Y)
+-- Smoothly moves `current` towards `goal` at `speed` units per second.
+local function approach(current, goal, speed, delta)
+    if current < goal then
+        return math.min(goal, current + speed * delta)
+    end
+    return math.max(goal, current - speed * delta)
 end
 
-local function pointInGui(guiObject, point)
-    if not guiObject or not guiObject.Parent or not guiObject.Visible then
-        return false
-    end
-    local pos = guiObject.AbsolutePosition
-    local size = guiObject.AbsoluteSize
-    return point.X >= pos.X and point.X <= pos.X + size.X and point.Y >= pos.Y and point.Y <= pos.Y + size.Y
+-- Health colour: red -> yellow -> green through HSV so mid values stay vivid.
+local function healthColor(percent)
+    percent = clamp(percent, 0, 1)
+    return Color3.fromHSV(lerp(0, 0.34, percent), 0.82, 1)
 end
+
+local GUI_FONTS = {
+    [0] = Enum.Font.GothamMedium,
+    [1] = Enum.Font.Arial,
+    [2] = Enum.Font.Code,
+    [3] = Enum.Font.RobotoMono
+}
+
+local BODY_PARTS = {
+    Head = true,
+    UpperTorso = true,
+    LowerTorso = true,
+    LeftUpperArm = true,
+    LeftLowerArm = true,
+    LeftHand = true,
+    RightUpperArm = true,
+    RightLowerArm = true,
+    RightHand = true,
+    LeftUpperLeg = true,
+    LeftLowerLeg = true,
+    LeftFoot = true,
+    RightUpperLeg = true,
+    RightLowerLeg = true,
+    RightFoot = true,
+    Torso = true,
+    ["Left Arm"] = true,
+    ["Right Arm"] = true,
+    ["Left Leg"] = true,
+    ["Right Leg"] = true
+}
+
+local CORNER_OFFSETS = {
+    Vector3.new(-1, -1, -1),
+    Vector3.new(-1, -1, 1),
+    Vector3.new(-1, 1, -1),
+    Vector3.new(-1, 1, 1),
+    Vector3.new(1, -1, -1),
+    Vector3.new(1, -1, 1),
+    Vector3.new(1, 1, -1),
+    Vector3.new(1, 1, 1)
+}
+
+local SKELETON_R15 = {
+    { "Head", "UpperTorso" },
+    { "UpperTorso", "LowerTorso" },
+    { "UpperTorso", "LeftUpperArm" },
+    { "LeftUpperArm", "LeftLowerArm" },
+    { "LeftLowerArm", "LeftHand" },
+    { "UpperTorso", "RightUpperArm" },
+    { "RightUpperArm", "RightLowerArm" },
+    { "RightLowerArm", "RightHand" },
+    { "LowerTorso", "LeftUpperLeg" },
+    { "LeftUpperLeg", "LeftLowerLeg" },
+    { "LeftLowerLeg", "LeftFoot" },
+    { "LowerTorso", "RightUpperLeg" },
+    { "RightUpperLeg", "RightLowerLeg" },
+    { "RightLowerLeg", "RightFoot" }
+}
+
+local SKELETON_R6 = {
+    { "Head", "Torso" },
+    { "Torso", "Left Arm" },
+    { "Torso", "Right Arm" },
+    { "Torso", "Left Leg" },
+    { "Torso", "Right Leg" }
+}
+
+---------------------------------------------------------------------------
+-- GUI host
+---------------------------------------------------------------------------
 
 local function getGuiParent()
     if gethui then
@@ -241,17 +364,23 @@ function ESP:GetCamera()
     return workspace.CurrentCamera
 end
 
-function ESP:CanUseDrawing(kind)
-    if self.RenderMode == "Gui" or self.Settings.RenderMode == "Gui" then
+---------------------------------------------------------------------------
+-- Visual primitives
+--
+-- A "visual" is { Kind, Mode, Object, Extra, Outline? }. When created with
+-- outlined = true it carries a second visual of the same kind that is drawn
+-- in the outline colour underneath (or as a border on top for filled shapes).
+---------------------------------------------------------------------------
+
+function ESP:CanUseDrawing()
+    local mode = self.Settings.RenderMode or self.RenderMode
+    if mode == "Gui" then
         return false
     end
     if type(Drawing) ~= "table" or type(Drawing.new) ~= "function" then
         return false
     end
-    if kind == "Triangle" or kind == "Circle" or kind == "Line" or kind == "Square" or kind == "Text" then
-        return true
-    end
-    return false
+    return true
 end
 
 function ESP:CreateGuiVisual(kind)
@@ -263,12 +392,12 @@ function ESP:CreateGuiVisual(kind)
         object = Instance.new("TextLabel")
         object.BackgroundTransparency = 1
         object.BorderSizePixel = 0
-        object.Font = Enum.Font.Code
+        object.Font = GUI_FONTS[self.Settings.TextFont] or Enum.Font.Code
         object.TextSize = self.Settings.TextSize
         object.TextStrokeTransparency = 0
         object.TextXAlignment = Enum.TextXAlignment.Left
-        object.TextYAlignment = Enum.TextYAlignment.Center
-        object.Size = UDim2.fromOffset(260, 18)
+        object.TextYAlignment = Enum.TextYAlignment.Top
+        object.Size = UDim2.fromOffset(300, 18)
     elseif kind == "Line" then
         object = Instance.new("Frame")
         object.BorderSizePixel = 0
@@ -299,12 +428,13 @@ function ESP:CreateGuiVisual(kind)
         stroke.Parent = object
         extra.Stroke = stroke
     elseif kind == "Triangle" then
+        -- Approximated with a rotated glyph; good enough for off-screen arrows.
         object = Instance.new("TextLabel")
         object.BackgroundTransparency = 1
         object.BorderSizePixel = 0
-        object.Font = Enum.Font.Code
+        object.Font = Enum.Font.GothamBold
         object.Text = ">"
-        object.TextSize = 22
+        object.TextSize = 24
         object.TextStrokeTransparency = 0
         object.TextXAlignment = Enum.TextXAlignment.Center
         object.TextYAlignment = Enum.TextYAlignment.Center
@@ -317,6 +447,7 @@ function ESP:CreateGuiVisual(kind)
 
     object.Name = kind
     object.Visible = false
+    object.ZIndex = Z.Main
     object.Parent = gui
     table.insert(self.GuiObjects, object)
     return {
@@ -327,8 +458,8 @@ function ESP:CreateGuiVisual(kind)
     }
 end
 
-function ESP:CreateVisual(kind)
-    if self:CanUseDrawing(kind) then
+function ESP:CreateRawVisual(kind)
+    if self:CanUseDrawing() then
         local ok, drawing = pcall(function()
             return Drawing.new(kind)
         end)
@@ -345,63 +476,148 @@ function ESP:CreateVisual(kind)
     return self:CreateGuiVisual(kind)
 end
 
-function ESP:SetVisual(visual, properties)
-    if not visual or not visual.Object then
+-- CreateVisual(kind) or CreateVisual(kind, true) for an outlined visual.
+function ESP:CreateVisual(kind, options)
+    local outlined = options == true or (type(options) == "table" and options.Outlined == true)
+    local visual = self:CreateRawVisual(kind)
+    if outlined and kind ~= "Text" then
+        visual.Outline = self:CreateRawVisual(kind)
+    end
+    return visual
+end
+
+local function setDrawingProp(object, property, value)
+    pcall(function()
+        object[property] = value
+    end)
+end
+
+function ESP:SetRawVisual(visual, properties)
+    local object = visual.Object
+    if not object then
         return
     end
 
-    local object = visual.Object
-    local alpha = properties.Transparency or properties.Alpha or self.Settings.Transparency or 1
+    local alpha = properties.Alpha
+    if alpha == nil then
+        alpha = properties.Transparency
+    end
+    if alpha == nil then
+        alpha = self.Settings.Transparency or 1
+    end
+    alpha = clamp(alpha, 0, 1)
     local color = properties.Color or self.Settings.TargetColor
     local outlineColor = properties.OutlineColor or self.Settings.OutlineColor
+    local zindex = properties.ZIndex or Z.Main
+    local kind = visual.Kind
 
     if visual.Mode == "Drawing" then
-        for property, value in pairs(properties) do
-            pcall(function()
-                object[property] = value
-            end)
+        if properties.Visible ~= nil then
+            setDrawingProp(object, "Visible", properties.Visible)
         end
-        if properties.Alpha ~= nil then
-            pcall(function()
-                object.Transparency = properties.Alpha
-            end)
+        if properties.Visible == false then
+            return
+        end
+        setDrawingProp(object, "Color", color)
+        setDrawingProp(object, "Transparency", alpha)
+        setDrawingProp(object, "ZIndex", zindex)
+
+        if kind == "Text" then
+            setDrawingProp(object, "Text", tostring(properties.Text or ""))
+            setDrawingProp(object, "Size", properties.Size or properties.TextSize or self.Settings.TextSize)
+            setDrawingProp(object, "Font", properties.Font or self.Settings.TextFont or 2)
+            setDrawingProp(object, "Center", properties.Center == true)
+            local outline = properties.Outline
+            if outline == nil then
+                outline = self.Settings.TextOutline
+            end
+            setDrawingProp(object, "Outline", outline == true and self.Settings.Outline ~= false)
+            setDrawingProp(object, "OutlineColor", outlineColor)
+            if properties.Position then
+                setDrawingProp(object, "Position", properties.Position)
+            end
+        elseif kind == "Line" then
+            if properties.From then
+                setDrawingProp(object, "From", properties.From)
+            end
+            if properties.To then
+                setDrawingProp(object, "To", properties.To)
+            end
+            setDrawingProp(object, "Thickness", properties.Thickness or 1)
+        elseif kind == "Square" then
+            if properties.Position then
+                setDrawingProp(object, "Position", properties.Position)
+            end
+            if properties.Size then
+                setDrawingProp(object, "Size", properties.Size)
+            end
+            setDrawingProp(object, "Thickness", properties.Thickness or 1)
+            setDrawingProp(object, "Filled", properties.Filled == true)
+        elseif kind == "Circle" then
+            if properties.Position then
+                setDrawingProp(object, "Position", properties.Position)
+            end
+            setDrawingProp(object, "Radius", properties.Radius or 4)
+            setDrawingProp(object, "NumSides", properties.NumSides or 24)
+            setDrawingProp(object, "Thickness", properties.Thickness or 1)
+            setDrawingProp(object, "Filled", properties.Filled == true)
+        elseif kind == "Triangle" then
+            if properties.PointA then
+                setDrawingProp(object, "PointA", properties.PointA)
+            end
+            if properties.PointB then
+                setDrawingProp(object, "PointB", properties.PointB)
+            end
+            if properties.PointC then
+                setDrawingProp(object, "PointC", properties.PointC)
+            end
+            setDrawingProp(object, "Thickness", properties.Thickness or 1)
+            setDrawingProp(object, "Filled", properties.Filled == true)
         end
         return
     end
 
+    -- GUI fallback -----------------------------------------------------------
     if properties.Visible ~= nil then
         object.Visible = properties.Visible
     end
+    if properties.Visible == false then
+        return
+    end
+    object.ZIndex = zindex
 
-    if visual.Kind == "Text" then
-        object.Text = tostring(properties.Text or object.Text or "")
-        object.TextSize = properties.Size or properties.TextSize or self.Settings.TextSize
+    if kind == "Text" then
+        local size = properties.Size or properties.TextSize or self.Settings.TextSize
+        local center = properties.Center == true
+        local outline = properties.Outline
+        if outline == nil then
+            outline = self.Settings.TextOutline
+        end
+        object.Text = tostring(properties.Text or "")
+        object.TextSize = size
+        object.Font = GUI_FONTS[properties.Font or self.Settings.TextFont] or Enum.Font.Code
         object.TextColor3 = color
         object.TextStrokeColor3 = outlineColor
-        object.TextStrokeTransparency = self.Settings.TextOutline and (1 - alpha) or 1
+        object.TextStrokeTransparency = (outline and self.Settings.Outline ~= false) and (1 - alpha) or 1
         object.TextTransparency = 1 - alpha
-        local center = properties.Center == true
         object.TextXAlignment = center and Enum.TextXAlignment.Center or Enum.TextXAlignment.Left
-        local width = properties.Width or 260
-        local height = properties.Height or math.max(16, object.TextSize + 4)
-        object.Size = UDim2.fromOffset(width, height)
+        object.AnchorPoint = center and Vector2.new(0.5, 0) or Vector2.new(0, 0)
+        object.Size = UDim2.fromOffset(properties.Width or 320, size + 4)
         if properties.Position then
-            local x = center and properties.Position.X - (width / 2) or properties.Position.X
-            object.Position = UDim2.fromOffset(x, properties.Position.Y)
+            object.Position = UDim2.fromOffset(properties.Position.X, properties.Position.Y)
         end
-    elseif visual.Kind == "Line" then
+    elseif kind == "Line" then
         local from = properties.From
         local to = properties.To
         if from and to then
             local delta = to - from
-            local length = delta.Magnitude
             object.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
-            object.Size = UDim2.fromOffset(math.max(1, length), properties.Thickness or 1)
+            object.Size = UDim2.fromOffset(math.max(1, delta.Magnitude), properties.Thickness or 1)
             object.Rotation = math.deg(atan2(delta.Y, delta.X))
         end
         object.BackgroundColor3 = color
         object.BackgroundTransparency = 1 - alpha
-    elseif visual.Kind == "Square" then
+    elseif kind == "Square" then
         if properties.Position then
             object.Position = UDim2.fromOffset(properties.Position.X, properties.Position.Y)
         end
@@ -409,15 +625,16 @@ function ESP:SetVisual(visual, properties)
             object.Size = UDim2.fromOffset(properties.Size.X, properties.Size.Y)
         end
         local filled = properties.Filled == true
-        object.BackgroundColor3 = properties.FilledColor or color
+        object.BackgroundColor3 = color
         object.BackgroundTransparency = filled and (1 - alpha) or 1
-        if visual.Extra and visual.Extra.Stroke then
-            visual.Extra.Stroke.Color = color
-            visual.Extra.Stroke.Thickness = properties.Thickness or 1
-            visual.Extra.Stroke.Transparency = 1 - alpha
-            visual.Extra.Stroke.Enabled = properties.Stroke ~= false
+        local stroke = visual.Extra and visual.Extra.Stroke
+        if stroke then
+            stroke.Color = color
+            stroke.Thickness = properties.Thickness or 1
+            stroke.Transparency = 1 - alpha
+            stroke.Enabled = not filled
         end
-    elseif visual.Kind == "Circle" then
+    elseif kind == "Circle" then
         local radius = properties.Radius or 4
         if properties.Position then
             object.Position = UDim2.fromOffset(properties.Position.X - radius, properties.Position.Y - radius)
@@ -425,15 +642,15 @@ function ESP:SetVisual(visual, properties)
         object.Size = UDim2.fromOffset(radius * 2, radius * 2)
         object.BackgroundColor3 = color
         object.BackgroundTransparency = properties.Filled and (1 - alpha) or 1
-        if visual.Extra and visual.Extra.Stroke then
-            visual.Extra.Stroke.Color = color
-            visual.Extra.Stroke.Thickness = properties.Thickness or 1
-            visual.Extra.Stroke.Transparency = 1 - alpha
+        local stroke = visual.Extra and visual.Extra.Stroke
+        if stroke then
+            stroke.Color = color
+            stroke.Thickness = properties.Thickness or 1
+            stroke.Transparency = 1 - alpha
+            stroke.Enabled = not properties.Filled
         end
-    elseif visual.Kind == "Triangle" then
-        local a = properties.PointA
-        local b = properties.PointB
-        local c = properties.PointC
+    elseif kind == "Triangle" then
+        local a, b, c = properties.PointA, properties.PointB, properties.PointC
         if a and b and c then
             local center = Vector2.new((a.X + b.X + c.X) / 3, (a.Y + b.Y + c.Y) / 3)
             local base = Vector2.new((b.X + c.X) / 2, (b.Y + c.Y) / 2)
@@ -446,13 +663,81 @@ function ESP:SetVisual(visual, properties)
         object.TextColor3 = color
         object.TextStrokeColor3 = outlineColor
         object.TextTransparency = 1 - alpha
-        object.TextStrokeTransparency = self.Settings.TextOutline and (1 - alpha) or 1
+        object.TextStrokeTransparency = self.Settings.Outline ~= false and (1 - alpha) or 1
         object.TextSize = properties.Size or 22
     end
 end
 
+-- Builds the property table for the outline layer of a visual.
+function ESP:BuildOutlineProperties(visual, properties)
+    local outline = {}
+    for key, value in pairs(properties) do
+        outline[key] = value
+    end
+    outline.Color = properties.OutlineColor or self.Settings.OutlineColor
+    outline.OutlineColor = nil
+    local zindex = properties.ZIndex or Z.Main
+    local kind = visual.Kind
+
+    if properties.Filled then
+        -- Filled shapes get a slightly larger filled shape underneath.
+        outline.ZIndex = zindex - 1
+        if kind == "Square" and properties.Position and properties.Size then
+            outline.Position = properties.Position - Vector2.new(1, 1)
+            outline.Size = properties.Size + Vector2.new(2, 2)
+        elseif kind == "Circle" then
+            outline.Radius = (properties.Radius or 4) + 1
+        elseif kind == "Triangle" and properties.PointA and properties.PointB and properties.PointC then
+            local a, b, c = properties.PointA, properties.PointB, properties.PointC
+            local center = (a + b + c) / 3
+            local function grow(point)
+                local direction = point - center
+                if direction.Magnitude < 0.001 then
+                    return point
+                end
+                return point + direction.Unit * 1.5
+            end
+            outline.PointA = grow(a)
+            outline.PointB = grow(b)
+            outline.PointC = grow(c)
+        end
+    else
+        -- Stroked shapes get a thicker stroke of the same shape underneath.
+        outline.ZIndex = zindex - 1
+        outline.Thickness = (properties.Thickness or 1) + 2
+        if visual.Mode == "Gui" and kind == "Square" and properties.Position and properties.Size then
+            -- UIStroke borders grow outward from the frame, so start the outline 1px inside.
+            outline.Position = properties.Position - Vector2.new(1, 1)
+            outline.Size = properties.Size + Vector2.new(2, 2)
+        end
+    end
+    return outline
+end
+
+function ESP:SetVisual(visual, properties)
+    if not visual or not visual.Object then
+        return
+    end
+    properties = properties or {}
+    if visual.Outline then
+        local wantOutline = properties.Outline ~= false and self.Settings.Outline ~= false
+        if properties.Visible ~= false and wantOutline then
+            self:SetRawVisual(visual.Outline, self:BuildOutlineProperties(visual, properties))
+        else
+            self:SetRawVisual(visual.Outline, { Visible = false })
+        end
+    end
+    self:SetRawVisual(visual, properties)
+end
+
 function ESP:HideVisual(visual)
-    if visual and visual.Object then
+    if not visual then
+        return
+    end
+    if visual.Outline then
+        self:HideVisual(visual.Outline)
+    end
+    if visual.Object then
         pcall(function()
             visual.Object.Visible = false
         end)
@@ -460,7 +745,14 @@ function ESP:HideVisual(visual)
 end
 
 function ESP:RemoveVisual(visual)
-    if not visual or not visual.Object then
+    if not visual then
+        return
+    end
+    if visual.Outline then
+        self:RemoveVisual(visual.Outline)
+        visual.Outline = nil
+    end
+    if not visual.Object then
         return
     end
     if visual.Mode == "Drawing" then
@@ -488,8 +780,8 @@ function ESP:HideVisuals(value)
         self:HideVisual(value)
         return
     end
-    for _, child in pairs(value) do
-        if type(child) == "table" then
+    for key, child in pairs(value) do
+        if key ~= "Highlight" and typeof(child) == "table" then
             self:HideVisuals(child)
         end
     end
@@ -509,19 +801,26 @@ function ESP:DestroyVisuals(value)
         self:RemoveVisual(value)
         return
     end
-    for _, child in pairs(value) do
-        if type(child) == "table" then
+    for key, child in pairs(value) do
+        if key ~= "Highlight" and typeof(child) == "table" then
             self:DestroyVisuals(child)
         end
     end
 end
 
+function ESP:GetTextHeight(size)
+    return (size or self.Settings.TextSize) + 2
+end
+
+---------------------------------------------------------------------------
+-- Settings
+---------------------------------------------------------------------------
+
 function ESP:SetSetting(key, value)
-    if self.Settings[key] ~= nil then
-        self.Settings[key] = value
-    else
-        self.Settings[key] = value
+    if looksLikeColor(value) then
+        value = tableToColor(value, self.Settings[key])
     end
+    self.Settings[key] = value
     if key == "Enabled" then
         self.Enabled = value == true
     end
@@ -530,7 +829,7 @@ end
 
 function ESP:SetSettings(settings)
     for key, value in pairs(settings or {}) do
-        if typeof(self.Settings[key]) == "Color3" then
+        if looksLikeColor(value) then
             self.Settings[key] = tableToColor(value, self.Settings[key])
         else
             self.Settings[key] = value
@@ -571,6 +870,10 @@ function ESP:JSONDecode(value)
     return nil
 end
 
+---------------------------------------------------------------------------
+-- Target resolution
+---------------------------------------------------------------------------
+
 function ESP:GetTargetName(target, info)
     if target.Options and target.Options.Name then
         return tostring(target.Options.Name)
@@ -582,15 +885,27 @@ function ESP:GetTargetName(target, info)
         end
     end
     if target.Player then
-        if self:GetSetting(target, "DisplayName") and target.Player.DisplayName and target.Player.DisplayName ~= target.Player.Name then
-            return target.Player.DisplayName .. " (@" .. target.Player.Name .. ")"
+        local player = target.Player
+        if self:GetSetting(target, "DisplayName") and player.DisplayName and player.DisplayName ~= player.Name then
+            return player.DisplayName .. " (@" .. player.Name .. ")"
         end
-        return target.Player.Name
+        return player.Name
     end
     if target.Instance and target.Instance.Name then
         return target.Instance.Name
     end
     return tostring(target.Key)
+end
+
+function ESP:IsFriendly(target)
+    local player = target.Player
+    if not player or not LocalPlayer or player == LocalPlayer then
+        return false
+    end
+    if player.Team ~= nil and LocalPlayer.Team ~= nil then
+        return player.Team == LocalPlayer.Team
+    end
+    return false
 end
 
 function ESP:GetTargetColor(target)
@@ -603,12 +918,16 @@ function ESP:GetTargetColor(target)
             return color
         end
     end
-    if target.Player and self.Settings.UseTeamColor and target.Player.TeamColor then
-        return target.Player.TeamColor.Color
-    end
-    if target.Player and LocalPlayer and target.Player.Team ~= nil and LocalPlayer.Team ~= nil then
-        if target.Player.Team == LocalPlayer.Team then
-            return self.Settings.FriendlyColor
+    local player = target.Player
+    if player then
+        if self.Settings.UseTeamColor and player.Team ~= nil then
+            return player.TeamColor.Color
+        end
+        if LocalPlayer and player.Team ~= nil and LocalPlayer.Team ~= nil then
+            if player.Team == LocalPlayer.Team then
+                return self.Settings.FriendlyColor
+            end
+            return self.Settings.EnemyColor
         end
         return self.Settings.EnemyColor
     end
@@ -647,10 +966,7 @@ end
 function ESP:ResolveTarget(target)
     local instance = target.Instance
     local player = target.Player
-    local model = nil
-    local root = nil
-    local humanoid = nil
-    local head = nil
+    local model, root, humanoid, head
 
     if player then
         instance = player.Character
@@ -692,8 +1008,7 @@ function ESP:ResolveTarget(target)
         return { Exists = false }
     end
 
-    local health = nil
-    local maxHealth = nil
+    local health, maxHealth
     if humanoid then
         health = humanoid.Health
         maxHealth = humanoid.MaxHealth
@@ -712,7 +1027,7 @@ function ESP:ResolveTarget(target)
         Player = player,
         Model = model,
         Root = root,
-        Head = head,
+        Head = head or (humanoid == nil and root or nil),
         Humanoid = humanoid,
         Health = health,
         MaxHealth = maxHealth,
@@ -720,60 +1035,135 @@ function ESP:ResolveTarget(target)
     }
 end
 
-function ESP:GetBoundingData(info)
-    local cf
-    local size
-    if info.Model then
-        local ok, boxCf, boxSize = pcall(function()
-            return info.Model:GetBoundingBox()
-        end)
-        if ok and boxCf and boxSize then
-            cf = boxCf
-            size = boxSize
+-- Body parts used for the precise box. Cached per target and refreshed every second.
+function ESP:GetBodyParts(target, model)
+    local cache = target.PartCache
+    local now = os.clock()
+    if cache and cache.Model == model and now - cache.Time < 1 then
+        return cache.Parts
+    end
+    local parts = {}
+    for _, child in ipairs(model:GetChildren()) do
+        if child:IsA("BasePart") and BODY_PARTS[child.Name] then
+            table.insert(parts, child)
         end
     end
-    if not cf and info.Root then
-        cf = info.Root.CFrame
-        size = info.Root.Size
+    if #parts == 0 then
+        for _, child in ipairs(model:GetChildren()) do
+            if child:IsA("BasePart") and child.Name ~= "HumanoidRootPart" then
+                table.insert(parts, child)
+                if #parts >= 24 then
+                    break
+                end
+            end
+        end
     end
-    if not cf then
-        return nil
-    end
-    return cf, size or Vector3.new(2, 5, 2)
+    target.PartCache = { Model = model, Parts = parts, Time = now }
+    return parts
 end
 
-function ESP:GetScreenBounds(camera, info, distance)
-    local cf, size = self:GetBoundingData(info)
+function ESP:GetBoundingData(target, info)
+    if info.Humanoid and info.Model and self:GetSetting(target, "BoxMode") ~= "Fast" then
+        local parts = self:GetBodyParts(target, info.Model)
+        if #parts > 0 then
+            return info.Root.CFrame, nil, parts
+        end
+    end
+    if info.Model and not info.Humanoid then
+        local ok, cf, size = pcall(function()
+            return info.Model:GetBoundingBox()
+        end)
+        if ok and cf and size then
+            return cf, size, nil
+        end
+    end
+    if info.Humanoid then
+        -- Fast mode: a fixed box around the root part.
+        local root = info.Root
+        local size = Vector3.new(4, 5.6, 4)
+        if root.Size.Y <= 1 then
+            size = Vector3.new(3, 3.5, 3)
+        end
+        return root.CFrame, size, nil
+    end
+    return info.Root.CFrame, info.Root.Size, nil
+end
+
+function ESP:GetScreenBounds(camera, target, info, want3D)
+    local cf, size, parts = self:GetBoundingData(target, info)
     if not cf then
         return nil
     end
 
-    local half = size / 2
-    local offsets = {
-        Vector3.new(-half.X, -half.Y, -half.Z),
-        Vector3.new(-half.X, -half.Y, half.Z),
-        Vector3.new(-half.X, half.Y, -half.Z),
-        Vector3.new(-half.X, half.Y, half.Z),
-        Vector3.new(half.X, -half.Y, -half.Z),
-        Vector3.new(half.X, -half.Y, half.Z),
-        Vector3.new(half.X, half.Y, -half.Z),
-        Vector3.new(half.X, half.Y, half.Z)
-    }
-
     local viewport = camera.ViewportSize
-    local points = {}
-    local corners = {}
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
     local anyOnScreen = false
+    local behind = false
 
-    for index, offset in ipairs(offsets) do
-        local world = cf:PointToWorldSpace(offset)
+    local function project(world)
         local screen, visible = camera:WorldToViewportPoint(world)
-        if screen.Z > 0 then
-            local point = Vector2.new(screen.X, screen.Y)
-            table.insert(points, point)
-            corners[index] = point
-            if visible or isPointInViewport(point, viewport) then
-                anyOnScreen = true
+        if screen.Z <= 0 then
+            behind = true
+            return
+        end
+        if screen.X < minX then minX = screen.X end
+        if screen.Y < minY then minY = screen.Y end
+        if screen.X > maxX then maxX = screen.X end
+        if screen.Y > maxY then maxY = screen.Y end
+        if visible or isPointInViewport(screen, viewport) then
+            anyOnScreen = true
+        end
+    end
+
+    local corners = nil
+    if parts then
+        -- Precise: union of every body part's corners.
+        local localMin, localMax
+        if want3D then
+            localMin = Vector3.new(math.huge, math.huge, math.huge)
+            localMax = Vector3.new(-math.huge, -math.huge, -math.huge)
+        end
+        for _, part in ipairs(parts) do
+            if part.Parent then
+                local partCF = part.CFrame
+                local half = part.Size / 2
+                for _, offset in ipairs(CORNER_OFFSETS) do
+                    local world = partCF:PointToWorldSpace(Vector3.new(half.X * offset.X, half.Y * offset.Y, half.Z * offset.Z))
+                    project(world)
+                    if want3D then
+                        local localPoint = cf:PointToObjectSpace(world)
+                        localMin = Vector3.new(math.min(localMin.X, localPoint.X), math.min(localMin.Y, localPoint.Y), math.min(localMin.Z, localPoint.Z))
+                        localMax = Vector3.new(math.max(localMax.X, localPoint.X), math.max(localMax.Y, localPoint.Y), math.max(localMax.Z, localPoint.Z))
+                    end
+                end
+            end
+        end
+        if want3D and localMin.X ~= math.huge then
+            corners = {}
+            for index, offset in ipairs(CORNER_OFFSETS) do
+                local localPoint = Vector3.new(
+                    offset.X < 0 and localMin.X or localMax.X,
+                    offset.Y < 0 and localMin.Y or localMax.Y,
+                    offset.Z < 0 and localMin.Z or localMax.Z
+                )
+                local screen = camera:WorldToViewportPoint(cf:PointToWorldSpace(localPoint))
+                if screen.Z > 0 then
+                    corners[index] = Vector2.new(screen.X, screen.Y)
+                end
+            end
+        end
+    else
+        local half = size / 2
+        corners = want3D and {} or nil
+        for index, offset in ipairs(CORNER_OFFSETS) do
+            local world = cf:PointToWorldSpace(Vector3.new(half.X * offset.X, half.Y * offset.Y, half.Z * offset.Z))
+            project(world)
+            if want3D then
+                local screen = camera:WorldToViewportPoint(world)
+                if screen.Z > 0 then
+                    corners[index] = Vector2.new(screen.X, screen.Y)
+                end
             end
         end
     end
@@ -781,141 +1171,234 @@ function ESP:GetScreenBounds(camera, info, distance)
     local rootScreen = camera:WorldToViewportPoint(info.Root.Position)
     local rootPoint = Vector2.new(rootScreen.X, rootScreen.Y)
 
-    if #points < 2 then
-        if rootScreen.Z <= 0 then
-            return {
-                Root = rootPoint,
-                RootDepth = rootScreen.Z,
-                OnScreen = false,
-                Corners = corners,
-                Position = rootPoint,
-                Size = Vector2.new(0, 0),
-                Center = rootPoint,
-                Top = rootPoint,
-                Bottom = rootPoint
-            }
-        end
-        local height = clamp((size.Y * 1200) / math.max(distance, 1), self.Settings.MinBoxSize, self.Settings.MaxBoxSize)
-        local width = clamp(height * math.max(0.35, size.X / math.max(size.Y, 0.01)), self.Settings.MinBoxSize, self.Settings.MaxBoxSize)
-        local pos = Vector2.new(rootPoint.X - width / 2, rootPoint.Y - height / 2)
+    if behind or minX == math.huge then
         return {
             Root = rootPoint,
             RootDepth = rootScreen.Z,
-            OnScreen = isPointInViewport(rootPoint, viewport),
+            OnScreen = false,
             Corners = corners,
-            Position = pos,
-            Size = Vector2.new(width, height),
+            Position = rootPoint,
+            Size = Vector2.new(0, 0),
             Center = rootPoint,
-            Top = Vector2.new(rootPoint.X, pos.Y),
-            Bottom = Vector2.new(rootPoint.X, pos.Y + height)
+            Top = rootPoint,
+            Bottom = rootPoint
         }
     end
 
-    local minX = math.huge
-    local minY = math.huge
-    local maxX = -math.huge
-    local maxY = -math.huge
-
-    for _, point in ipairs(points) do
-        minX = math.min(minX, point.X)
-        minY = math.min(minY, point.Y)
-        maxX = math.max(maxX, point.X)
-        maxY = math.max(maxY, point.Y)
-    end
-
-    local width = clamp(maxX - minX, self.Settings.MinBoxSize, self.Settings.MaxBoxSize)
-    local height = clamp(maxY - minY, self.Settings.MinBoxSize, self.Settings.MaxBoxSize)
-    local position = Vector2.new(minX, minY)
-    local center = Vector2.new(minX + width / 2, minY + height / 2)
+    local minSize = self.Settings.MinBoxSize or 4
+    local maxSize = self.Settings.MaxBoxSize or 1200
+    local width = clamp(maxX - minX, minSize, maxSize)
+    local height = clamp(maxY - minY, minSize, maxSize)
+    -- Snap to whole pixels so 1px lines stay crisp.
+    local x = math.floor(minX + 0.5)
+    local y = math.floor(minY + 0.5)
+    width = math.floor(width + 0.5)
+    height = math.floor(height + 0.5)
+    local center = Vector2.new(x + width / 2, y + height / 2)
 
     return {
         Root = rootPoint,
         RootDepth = rootScreen.Z,
         OnScreen = rootScreen.Z > 0 and anyOnScreen,
         Corners = corners,
-        Position = position,
+        Position = Vector2.new(x, y),
         Size = Vector2.new(width, height),
         Center = center,
-        Top = Vector2.new(center.X, minY),
-        Bottom = Vector2.new(center.X, minY + height)
+        Top = Vector2.new(center.X, y),
+        Bottom = Vector2.new(center.X, y + height)
     }
 end
 
-function ESP:BuildContext(target, info)
+function ESP:GetLocalRoot()
+    local character = LocalPlayer and LocalPlayer.Character
+    if not character then
+        return nil
+    end
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+        or character.PrimaryPart
+end
+
+function ESP:GetDistanceOrigin(camera)
+    if self.Settings.DistanceOrigin == "Character" then
+        local root = self:GetLocalRoot()
+        if root then
+            return root.Position
+        end
+    end
+    return camera.CFrame.Position
+end
+
+-- Line-of-sight check from the camera to the target's head, throttled per target.
+function ESP:IsVisibleToCamera(target, info, camera)
+    local state = target.VisibleState
+    local now = os.clock()
+    local interval = self.Settings.VisibleCheckInterval or 0.08
+    if state and now - state.Time < interval then
+        return state.Visible
+    end
+
+    local origin = camera.CFrame.Position
+    local point = info.Head or info.Root
+    local params = self.RaycastParams
+    if not params then
+        params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.IgnoreWater = true
+        self.RaycastParams = params
+    end
+    local ignore = { camera }
+    if LocalPlayer and LocalPlayer.Character then
+        table.insert(ignore, LocalPlayer.Character)
+    end
+    if info.Model then
+        table.insert(ignore, info.Model)
+    elseif info.Root then
+        table.insert(ignore, info.Root)
+    end
+    params.FilterDescendantsInstances = ignore
+
+    local direction = point.Position - origin
+    local visible = true
+    local ok, result = pcall(function()
+        return workspace:Raycast(origin, direction, params)
+    end)
+    if ok and result and result.Instance then
+        visible = result.Instance.Transparency >= 0.95 or result.Instance.CanCollide == false and result.Instance.Transparency > 0.5
+    end
+    target.VisibleState = { Time = now, Visible = visible }
+    return visible
+end
+
+function ESP:GetTextSize(target, distance)
+    local size = self:GetSetting(target, "TextSize") or 13
+    if self:GetSetting(target, "ScaleWithDistance") then
+        local maxDistance = self:GetSetting(target, "MaxDistance") or 2500
+        local t = clamp(distance / math.max(maxDistance, 1), 0, 1)
+        size = size * (1 - 0.3 * t)
+        size = math.max(size, (self:GetSetting(target, "TextSize") or 13) * 0.7)
+    end
+    return math.floor(size + 0.5)
+end
+
+function ESP:BuildContext(target, info, delta)
     local camera = self:GetCamera()
+    local fadeSpeed = self.Settings.FadeSpeed or 10
     if not camera or not info.Exists or not info.Root then
+        target.Fade = approach(target.Fade or 0, 0, fadeSpeed, delta or 0)
         return {
             Exists = false,
             Visible = false,
             OnScreen = false,
-            Draw = false
+            Draw = false,
+            Fade = target.Fade
         }
     end
 
-    local cameraPos = camera.CFrame.Position
-    local distance = (cameraPos - info.Root.Position).Magnitude
+    local distance = (self:GetDistanceOrigin(camera) - info.Root.Position).Magnitude
     local maxDistance = self:GetSetting(target, "MaxDistance") or math.huge
     local visible = distance <= maxDistance
-    local localTeam = LocalPlayer and LocalPlayer.Team or nil
 
     if target.Player == LocalPlayer and not self:GetSetting(target, "ShowLocalPlayer") then
         visible = false
     end
 
-    if self:GetSetting(target, "TeamCheck") and target.Player and localTeam and target.Player.Team == localTeam then
+    if visible and self:GetSetting(target, "TeamCheck") and self:IsFriendly(target) then
         visible = false
     end
 
-    if target.Options and type(target.Options.Filter) == "function" then
+    if visible and info.Humanoid and info.Health ~= nil and info.Health <= 0 and not self:GetSetting(target, "ShowDead") then
+        visible = false
+    end
+
+    if visible and target.Options and type(target.Options.Filter) == "function" then
         local allowed = safeCallback(target.Options.Filter, target, info)
         if allowed == false then
             visible = false
         end
     end
 
-    local bounds = self:GetScreenBounds(camera, info, distance)
-    if not bounds then
-        visible = false
+    target.Fade = approach(target.Fade or 0, visible and 1 or 0, fadeSpeed, delta or 0)
+    local fade = target.Fade
+    if fade <= 0.01 then
+        return {
+            Exists = true,
+            Visible = false,
+            OnScreen = false,
+            Draw = false,
+            Fade = fade,
+            Camera = camera,
+            Distance = distance,
+            Info = info
+        }
     end
 
-    local alpha = self:GetSetting(target, "Transparency") or 1
-    if self:GetSetting(target, "FadeDistance") and maxDistance and maxDistance > 0 then
-        alpha = alpha * clamp(1 - (distance / maxDistance), 0.18, 1)
+    local want3D = self:GetSetting(target, "Box3D") == true
+    local bounds = self:GetScreenBounds(camera, target, info, want3D)
+
+    local alpha = (self:GetSetting(target, "Transparency") or 1) * fade
+    if self:GetSetting(target, "FadeDistance") and maxDistance and maxDistance > 0 and maxDistance < math.huge then
+        local t = clamp((distance / maxDistance - 0.6) / 0.4, 0, 1)
+        alpha = alpha * lerp(1, 0.3, t)
     end
+
+    local color = self:GetTargetColor(target)
+    local visibleToCamera = nil
+    if self:GetSetting(target, "VisibleCheck") then
+        visibleToCamera = self:IsVisibleToCamera(target, info, camera)
+        if visibleToCamera and not (target.Options and target.Options.Color) then
+            color = self.Settings.VisibleColor
+        end
+    end
+    if self.Settings.Rainbow then
+        color = Color3.fromHSV(self.CurrentRainbowHue, 0.85, 1)
+    end
+
+    local textSize = self:GetTextSize(target, distance)
 
     return {
         Exists = true,
-        Visible = visible,
+        Visible = visible or fade > 0.01,
         OnScreen = bounds and bounds.OnScreen == true or false,
-        Draw = visible and bounds and bounds.OnScreen == true or false,
+        Draw = bounds ~= nil and bounds.OnScreen == true,
+        Fade = fade,
         Camera = camera,
         Distance = distance,
         Bounds = bounds,
-        Color = self:GetTargetColor(target),
-        Alpha = alpha,
+        Color = color,
+        TextColor = self:GetSetting(target, "TextUseTargetColor") and color or self.Settings.TextColor,
+        TextSize = textSize,
+        TextHeight = self:GetTextHeight(textSize),
+        VisibleToCamera = visibleToCamera,
+        Alpha = clamp(alpha, 0, 1),
         Info = info,
         TopOffset = 0,
-        BottomOffset = 0
+        BottomOffset = 0,
+        LeftOffset = 0,
+        RightOffset = 0
     }
 end
+
+---------------------------------------------------------------------------
+-- Registries
+---------------------------------------------------------------------------
 
 function ESP:RegisterFeature(name, feature)
     feature.Name = name
     feature.Order = feature.Order or (#self.FeatureOrder + 1)
+    if not self.Features[name] then
+        table.insert(self.FeatureOrder, name)
+    end
     self.Features[name] = feature
-    table.insert(self.FeatureOrder, name)
     table.sort(self.FeatureOrder, function(a, b)
-        local left = self.Features[a]
-        local right = self.Features[b]
-        return (left.Order or 0) < (right.Order or 0)
+        return (self.Features[a].Order or 0) < (self.Features[b].Order or 0)
     end)
     return feature
 end
 
 function ESP:SetFeatureEnabled(name, enabled)
-    if self.Settings[name] ~= nil then
-        self.Settings[name] = enabled == true
-    end
+    self.Settings[name] = enabled == true
     return self
 end
 
@@ -943,6 +1426,10 @@ function ESP:StopProvider(name)
     return provider
 end
 
+---------------------------------------------------------------------------
+-- Tracking
+---------------------------------------------------------------------------
+
 function ESP:GetTargetKey(instance, options)
     if options and options.Key then
         return tostring(options.Key)
@@ -959,7 +1446,7 @@ end
 
 function ESP:Track(instance, options)
     options = options or {}
-    if typeof(instance) == "Instance" and instance:IsA("Player") then
+    if isInstance(instance) and instance:IsA("Player") then
         return self:TrackPlayer(instance, options)
     end
     if not instance then
@@ -981,6 +1468,7 @@ function ESP:Track(instance, options)
         Player = options.Player,
         Options = options,
         FeatureState = {},
+        Fade = 0,
         Created = os.clock()
     }
 
@@ -1015,12 +1503,15 @@ function ESP:TrackPlayer(player, options)
         Instance = player.Character,
         Options = targetOptions,
         FeatureState = {},
+        Fade = 0,
         Created = os.clock()
     }
     self.Targets[target.Key] = target
     table.insert(self.TargetList, target)
     target.CharacterConnection = connect(player.CharacterAdded, function(character)
         target.Instance = character
+        target.PartCache = nil
+        target.Fade = 0
     end)
     return target
 end
@@ -1170,6 +1661,10 @@ function ESP:TrackFolder(folder, options)
     return tracker
 end
 
+---------------------------------------------------------------------------
+-- Helpers used by features
+---------------------------------------------------------------------------
+
 function ESP:GetLineOrigin()
     local camera = self:GetCamera()
     local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
@@ -1189,28 +1684,8 @@ function ESP:GetSkeletonSegments(info)
     if not model then
         return {}
     end
-    local names = {
-        { "Head", "UpperTorso" },
-        { "UpperTorso", "LowerTorso" },
-        { "UpperTorso", "LeftUpperArm" },
-        { "LeftUpperArm", "LeftLowerArm" },
-        { "LeftLowerArm", "LeftHand" },
-        { "UpperTorso", "RightUpperArm" },
-        { "RightUpperArm", "RightLowerArm" },
-        { "RightLowerArm", "RightHand" },
-        { "LowerTorso", "LeftUpperLeg" },
-        { "LeftUpperLeg", "LeftLowerLeg" },
-        { "LeftLowerLeg", "LeftFoot" },
-        { "LowerTorso", "RightUpperLeg" },
-        { "RightUpperLeg", "RightLowerLeg" },
-        { "RightLowerLeg", "RightFoot" },
-        { "Head", "Torso" },
-        { "Torso", "Left Arm" },
-        { "Torso", "Right Arm" },
-        { "Torso", "Left Leg" },
-        { "Torso", "Right Leg" }
-    }
     local segments = {}
+    local names = model:FindFirstChild("UpperTorso") and SKELETON_R15 or SKELETON_R6
     for _, pair in ipairs(names) do
         local a = model:FindFirstChild(pair[1])
         local b = model:FindFirstChild(pair[2])
@@ -1221,17 +1696,61 @@ function ESP:GetSkeletonSegments(info)
     return segments
 end
 
+-- Draws a label above the box and advances context.TopOffset.
+function ESP:DrawTopText(visual, context, text, color)
+    local height = context.TextHeight
+    local y = context.Bounds.Position.Y - height - 2 - context.TopOffset
+    context.TopOffset = context.TopOffset + height
+    self:SetVisual(visual, {
+        Visible = true,
+        Text = text,
+        Position = Vector2.new(context.Bounds.Top.X, y),
+        Color = color or context.TextColor,
+        Alpha = context.Alpha,
+        Center = true,
+        Size = context.TextSize,
+        ZIndex = Z.Text
+    })
+end
+
+-- Draws a label below the box and advances context.BottomOffset.
+function ESP:DrawBottomText(visual, context, text, color)
+    local height = context.TextHeight
+    local y = context.Bounds.Position.Y + context.Bounds.Size.Y + 2 + context.BottomOffset
+    context.BottomOffset = context.BottomOffset + height
+    self:SetVisual(visual, {
+        Visible = true,
+        Text = text,
+        Position = Vector2.new(context.Bounds.Bottom.X, y),
+        Color = color or context.TextColor,
+        Alpha = context.Alpha,
+        Center = true,
+        Size = context.TextSize,
+        ZIndex = Z.Text
+    })
+end
+
+---------------------------------------------------------------------------
+-- Render loop
+---------------------------------------------------------------------------
+
 function ESP:Step(delta)
     if self.Unloaded then
         return
     end
-    self.CurrentRainbowHue = (self.CurrentRainbowHue + delta / 8) % 1
+    self.CurrentRainbowHue = (self.CurrentRainbowHue + delta * (self.Settings.RainbowSpeed or 1) / 8) % 1
+
     if not self.Enabled or not self.Settings.Enabled then
-        for _, target in ipairs(self.TargetList) do
-            self:HideVisuals(target.FeatureState)
+        if not self.HiddenAll then
+            for _, target in ipairs(self.TargetList) do
+                self:HideVisuals(target.FeatureState)
+                target.Fade = 0
+            end
+            self.HiddenAll = true
         end
         return
     end
+    self.HiddenAll = false
 
     self.LastStep = self.LastStep or 0
     local refresh = self.Settings.RefreshInterval or 0
@@ -1240,15 +1759,13 @@ function ESP:Step(delta)
         if self.LastStep < refresh then
             return
         end
+        delta = self.LastStep
         self.LastStep = 0
     end
 
     for _, target in ipairs(self.TargetList) do
         local info = self:ResolveTarget(target)
-        local context = self:BuildContext(target, info)
-        if self.Settings.Rainbow then
-            context.Color = Color3.fromHSV(self.CurrentRainbowHue, 0.9, 1)
-        end
+        local context = self:BuildContext(target, info, delta)
         for _, featureName in ipairs(self.FeatureOrder) do
             local feature = self.Features[featureName]
             if feature then
@@ -1301,12 +1818,21 @@ function ESP:Disable()
     return self:SetEnabled(false)
 end
 
+function ESP:Toggle()
+    return self:SetEnabled(not self.Enabled)
+end
+
 function ESP:Unload()
     if self.Unloaded then
         return
     end
     self.Unloaded = true
     self.Enabled = false
+    for _, provider in pairs(self.Providers) do
+        if provider.Stop then
+            pcall(provider.Stop, provider)
+        end
+    end
     for _, connection in ipairs(self.Connections) do
         pcall(function()
             connection:Disconnect()
@@ -1329,19 +1855,28 @@ function ESP:Unload()
     if self.ScreenGui then
         self.ScreenGui:Destroy()
     end
+    if Env.UniversalESPLib == self then
+        Env.UniversalESPLib = nil
+    end
 end
+
+---------------------------------------------------------------------------
+-- Built-in features
+---------------------------------------------------------------------------
 
 local function hideFeature(esp, state)
     esp:HideVisuals(state)
 end
 
+-- Box: outlined corner or full box with an optional translucent fill.
 ESP:RegisterFeature("Box", {
     Order = 10,
     Create = function(_, _, state, esp)
-        state.Full = esp:CreateVisual("Square")
+        state.Fill = esp:CreateVisual("Square")
+        state.Full = esp:CreateVisual("Square", true)
         state.Corners = {}
         for index = 1, 8 do
-            state.Corners[index] = esp:CreateVisual("Line")
+            state.Corners[index] = esp:CreateVisual("Line", true)
         end
     end,
     Update = function(_, target, state, context, esp)
@@ -1354,6 +1889,22 @@ ESP:RegisterFeature("Box", {
         local alpha = context.Alpha
         local style = esp:GetSetting(target, "BoxStyle")
         local thickness = esp:GetSetting(target, "BoxThickness") or 1
+
+        if esp:GetSetting(target, "BoxFill") then
+            esp:SetVisual(state.Fill, {
+                Visible = true,
+                Position = bounds.Position,
+                Size = bounds.Size,
+                Color = color,
+                Alpha = alpha * (1 - clamp(esp:GetSetting(target, "BoxFillTransparency") or 0.9, 0, 1)),
+                Filled = true,
+                Outline = false,
+                ZIndex = Z.Fill
+            })
+        else
+            esp:HideVisual(state.Fill)
+        end
+
         if style == "Full" then
             esp:SetVisual(state.Full, {
                 Visible = true,
@@ -1361,7 +1912,8 @@ ESP:RegisterFeature("Box", {
                 Size = bounds.Size,
                 Color = color,
                 Alpha = alpha,
-                Thickness = thickness
+                Thickness = thickness,
+                ZIndex = Z.Main
             })
             for _, line in ipairs(state.Corners) do
                 esp:HideVisual(line)
@@ -1370,11 +1922,9 @@ ESP:RegisterFeature("Box", {
         end
 
         esp:HideVisual(state.Full)
-        local x = bounds.Position.X
-        local y = bounds.Position.Y
-        local w = bounds.Size.X
-        local h = bounds.Size.Y
-        local l = math.min(w, h) * 0.26
+        local x, y = bounds.Position.X, bounds.Position.Y
+        local w, h = bounds.Size.X, bounds.Size.Y
+        local l = math.max(3, math.floor(math.min(w, h) * 0.24 + 0.5))
         local points = {
             { Vector2.new(x, y), Vector2.new(x + l, y) },
             { Vector2.new(x, y), Vector2.new(x, y + l) },
@@ -1392,22 +1942,24 @@ ESP:RegisterFeature("Box", {
                 To = pair[2],
                 Color = color,
                 Alpha = alpha,
-                Thickness = thickness
+                Thickness = thickness,
+                ZIndex = Z.Main
             })
         end
     end
 })
 
+-- Box3D: oriented bounding box around the rig.
 ESP:RegisterFeature("Box3D", {
     Order = 11,
     Create = function(_, _, state, esp)
         state.Lines = {}
         for index = 1, 12 do
-            state.Lines[index] = esp:CreateVisual("Line")
+            state.Lines[index] = esp:CreateVisual("Line", true)
         end
     end,
     Update = function(_, target, state, context, esp)
-        if not esp:GetSetting(target, "Box3D") or not context.Visible or not context.Bounds or not context.Bounds.Corners then
+        if not esp:GetSetting(target, "Box3D") or not context.Draw or not context.Bounds.Corners then
             hideFeature(esp, state)
             return
         end
@@ -1425,8 +1977,9 @@ ESP:RegisterFeature("Box3D", {
                     From = a,
                     To = b,
                     Color = context.Color,
-                    Alpha = context.Alpha,
-                    Thickness = esp:GetSetting(target, "BoxThickness") or 1
+                    Alpha = context.Alpha * 0.9,
+                    Thickness = esp:GetSetting(target, "BoxThickness") or 1,
+                    ZIndex = Z.Main
                 })
             else
                 esp:HideVisual(state.Lines[index])
@@ -1435,6 +1988,7 @@ ESP:RegisterFeature("Box3D", {
     end
 })
 
+-- Name: centred above the box.
 ESP:RegisterFeature("Name", {
     Order = 20,
     Create = function(_, _, state, esp)
@@ -1445,81 +1999,103 @@ ESP:RegisterFeature("Name", {
             hideFeature(esp, state)
             return
         end
-        local text = esp:GetTargetName(target, context.Info)
-        local position = Vector2.new(context.Bounds.Top.X, context.Bounds.Position.Y - 17 - context.TopOffset)
-        context.TopOffset = context.TopOffset + 15
-        esp:SetVisual(state.Text, {
-            Visible = true,
-            Text = text,
-            Position = position,
-            Color = context.Color,
-            Alpha = context.Alpha,
-            Center = true,
-            Size = esp:GetSetting(target, "TextSize")
-        })
+        esp:DrawTopText(state.Text, context, esp:GetTargetName(target, context.Info))
     end
 })
 
+-- HealthBar: vertical bar beside the box with an outlined track and a value label.
 ESP:RegisterFeature("HealthBar", {
     Order = 30,
     Create = function(_, _, state, esp)
-        state.Back = esp:CreateVisual("Square")
+        state.Back = esp:CreateVisual("Square", true)
         state.Fill = esp:CreateVisual("Square")
+        state.Text = esp:CreateVisual("Text")
     end,
     Update = function(_, target, state, context, esp)
-        if not esp:GetSetting(target, "HealthBar") or not context.Draw or not context.Info.Health or not context.Info.MaxHealth then
+        local info = context.Info
+        if not esp:GetSetting(target, "HealthBar") or not context.Draw or not info.Health or not info.MaxHealth then
             hideFeature(esp, state)
             return
         end
         local bounds = context.Bounds
-        local percent = clamp(context.Info.Health / math.max(context.Info.MaxHealth, 1), 0, 1)
+        local alpha = context.Alpha
+        local percent = clamp(info.Health / math.max(info.MaxHealth, 1), 0, 1)
+        local width = math.max(1, esp:GetSetting(target, "HealthBarWidth") or 2)
         local height = bounds.Size.Y
-        local fillHeight = height * percent
-        local x = bounds.Position.X - 6
+        local fillHeight = math.floor(height * percent + 0.5)
+        local side = esp:GetSetting(target, "HealthBarSide") or "Left"
+        local gap = 4
+        local x
+        if side == "Right" then
+            x = bounds.Position.X + bounds.Size.X + gap + context.RightOffset
+            context.RightOffset = context.RightOffset + width + gap
+        else
+            x = bounds.Position.X - gap - width - context.LeftOffset
+            context.LeftOffset = context.LeftOffset + width + gap
+        end
         local y = bounds.Position.Y
+        local color = healthColor(percent)
+
         esp:SetVisual(state.Back, {
             Visible = true,
             Position = Vector2.new(x, y),
-            Size = Vector2.new(3, height),
-            Color = esp.Settings.OutlineColor,
+            Size = Vector2.new(width, height),
+            Color = Color3.fromRGB(28, 28, 32),
+            Alpha = alpha * 0.9,
             Filled = true,
-            Alpha = context.Alpha
+            ZIndex = Z.Main
         })
         esp:SetVisual(state.Fill, {
-            Visible = true,
+            Visible = fillHeight > 0,
             Position = Vector2.new(x, y + height - fillHeight),
-            Size = Vector2.new(3, fillHeight),
-            Color = Color3.fromRGB(lerp(255, 80, percent), lerp(60, 255, percent), 80),
+            Size = Vector2.new(width, fillHeight),
+            Color = color,
+            Alpha = alpha,
             Filled = true,
-            Alpha = context.Alpha
+            ZIndex = Z.Detail
         })
-    end
-})
 
-ESP:RegisterFeature("HealthText", {
-    Order = 31,
-    Create = function(_, _, state, esp)
-        state.Text = esp:CreateVisual("Text")
-    end,
-    Update = function(_, target, state, context, esp)
-        if not esp:GetSetting(target, "HealthText") or not context.Draw or not context.Info.Health then
-            hideFeature(esp, state)
-            return
+        local showText = esp:GetSetting(target, "HealthText") and (esp:GetSetting(target, "HealthTextAlways") or percent < 0.999)
+        if showText then
+            local size = math.max(8, context.TextSize - 3)
+            local textY = clamp(y + height - fillHeight - size / 2, y - size, y + height - size)
+            local textX = side == "Right" and (x + width + 3) or (x - 3)
+            local props = {
+                Visible = true,
+                Text = tostring(math.floor(info.Health + 0.5)),
+                Position = Vector2.new(textX, textY),
+                Color = color,
+                Alpha = alpha,
+                Center = false,
+                Size = size,
+                ZIndex = Z.Text
+            }
+            if state.Text.Mode == "Drawing" then
+                esp:SetVisual(state.Text, props)
+                if side ~= "Right" then
+                    -- Right-align against the bar using the measured text width.
+                    local ok, textBounds = pcall(function()
+                        return state.Text.Object.TextBounds
+                    end)
+                    if ok and textBounds then
+                        state.Text.Object.Position = Vector2.new(textX - textBounds.X, textY)
+                    end
+                end
+            else
+                props.Width = 40
+                if side ~= "Right" then
+                    props.Position = Vector2.new(textX - 40, textY)
+                end
+                esp:SetVisual(state.Text, props)
+                state.Text.Object.TextXAlignment = side == "Right" and Enum.TextXAlignment.Left or Enum.TextXAlignment.Right
+            end
+        else
+            esp:HideVisual(state.Text)
         end
-        local health = math.floor(context.Info.Health + 0.5)
-        local position = Vector2.new(context.Bounds.Position.X + context.Bounds.Size.X + 4, context.Bounds.Position.Y - 1)
-        esp:SetVisual(state.Text, {
-            Visible = true,
-            Text = tostring(health),
-            Position = position,
-            Color = context.Color,
-            Alpha = context.Alpha,
-            Center = false,
-            Size = esp:GetSetting(target, "TextSize")
-        })
     end
 })
 
+-- Distance: below the box.
 ESP:RegisterFeature("Distance", {
     Order = 40,
     Create = function(_, _, state, esp)
@@ -1532,20 +2108,11 @@ ESP:RegisterFeature("Distance", {
         end
         local unit = esp:GetSetting(target, "DistanceUnit") or "m"
         local text = tostring(math.floor(context.Distance + 0.5)) .. unit
-        local position = Vector2.new(context.Bounds.Bottom.X, context.Bounds.Position.Y + context.Bounds.Size.Y + 1 + context.BottomOffset)
-        context.BottomOffset = context.BottomOffset + 15
-        esp:SetVisual(state.Text, {
-            Visible = true,
-            Text = text,
-            Position = position,
-            Color = context.Color,
-            Alpha = context.Alpha,
-            Center = true,
-            Size = esp:GetSetting(target, "TextSize")
-        })
+        esp:DrawBottomText(state.Text, context, text)
     end
 })
 
+-- Tool: equipped tool name below the distance.
 ESP:RegisterFeature("Tool", {
     Order = 41,
     Create = function(_, _, state, esp)
@@ -1556,24 +2123,15 @@ ESP:RegisterFeature("Tool", {
             hideFeature(esp, state)
             return
         end
-        local position = Vector2.new(context.Bounds.Bottom.X, context.Bounds.Position.Y + context.Bounds.Size.Y + 1 + context.BottomOffset)
-        context.BottomOffset = context.BottomOffset + 15
-        esp:SetVisual(state.Text, {
-            Visible = true,
-            Text = "[" .. context.Info.Tool .. "]",
-            Position = position,
-            Color = context.Color,
-            Alpha = context.Alpha,
-            Center = true,
-            Size = esp:GetSetting(target, "TextSize")
-        })
+        esp:DrawBottomText(state.Text, context, "[" .. context.Info.Tool .. "]")
     end
 })
 
+-- Tracer: outlined line from the chosen origin to the bottom of the box.
 ESP:RegisterFeature("Tracer", {
     Order = 50,
     Create = function(_, _, state, esp)
-        state.Line = esp:CreateVisual("Line")
+        state.Line = esp:CreateVisual("Line", true)
     end,
     Update = function(_, target, state, context, esp)
         if not esp:GetSetting(target, "Tracer") or not context.Draw then
@@ -1586,30 +2144,33 @@ ESP:RegisterFeature("Tracer", {
             To = context.Bounds.Bottom,
             Color = context.Color,
             Alpha = context.Alpha,
-            Thickness = esp:GetSetting(target, "BoxThickness") or 1
+            Thickness = esp:GetSetting(target, "TracerThickness") or 1,
+            ZIndex = Z.Main
         })
     end
 })
 
+-- Skeleton: outlined bone lines for R6 and R15 rigs.
 ESP:RegisterFeature("Skeleton", {
     Order = 60,
     Create = function(_, _, state, esp)
         state.Lines = {}
-        for index = 1, 20 do
-            state.Lines[index] = esp:CreateVisual("Line")
+        for index = 1, 14 do
+            state.Lines[index] = esp:CreateVisual("Line", true)
         end
     end,
     Update = function(_, target, state, context, esp)
-        if not esp:GetSetting(target, "Skeleton") or not context.Visible or not context.Camera then
+        if not esp:GetSetting(target, "Skeleton") or not context.Draw then
             hideFeature(esp, state)
             return
         end
         local segments = esp:GetSkeletonSegments(context.Info)
+        local camera = context.Camera
         for index, line in ipairs(state.Lines) do
             local segment = segments[index]
             if segment then
-                local a = context.Camera:WorldToViewportPoint(segment[1].Position)
-                local b = context.Camera:WorldToViewportPoint(segment[2].Position)
+                local a = camera:WorldToViewportPoint(segment[1].Position)
+                local b = camera:WorldToViewportPoint(segment[2].Position)
                 if a.Z > 0 and b.Z > 0 then
                     esp:SetVisual(line, {
                         Visible = true,
@@ -1617,7 +2178,8 @@ ESP:RegisterFeature("Skeleton", {
                         To = Vector2.new(b.X, b.Y),
                         Color = context.Color,
                         Alpha = context.Alpha,
-                        Thickness = esp:GetSetting(target, "SkeletonThickness") or 1
+                        Thickness = esp:GetSetting(target, "SkeletonThickness") or 1,
+                        ZIndex = Z.Detail
                     })
                 else
                     esp:HideVisual(line)
@@ -1629,13 +2191,14 @@ ESP:RegisterFeature("Skeleton", {
     end
 })
 
+-- HeadDot: filled, outlined dot on the head.
 ESP:RegisterFeature("HeadDot", {
     Order = 70,
     Create = function(_, _, state, esp)
-        state.Circle = esp:CreateVisual("Circle")
+        state.Circle = esp:CreateVisual("Circle", true)
     end,
     Update = function(_, target, state, context, esp)
-        if not esp:GetSetting(target, "HeadDot") or not context.Visible or not context.Info.Head then
+        if not esp:GetSetting(target, "HeadDot") or not context.Draw or not context.Info.Head then
             hideFeature(esp, state)
             return
         end
@@ -1650,18 +2213,21 @@ ESP:RegisterFeature("HeadDot", {
             Radius = esp:GetSetting(target, "HeadDotRadius") or 3,
             Color = context.Color,
             Alpha = context.Alpha,
-            Thickness = 1
+            Filled = true,
+            Thickness = 1,
+            ZIndex = Z.Detail
         })
     end
 })
 
+-- LookLine: short outlined line showing where the head is facing.
 ESP:RegisterFeature("LookLine", {
     Order = 71,
     Create = function(_, _, state, esp)
-        state.Line = esp:CreateVisual("Line")
+        state.Line = esp:CreateVisual("Line", true)
     end,
     Update = function(_, target, state, context, esp)
-        if not esp:GetSetting(target, "LookLine") or not context.Visible or not context.Info.Head then
+        if not esp:GetSetting(target, "LookLine") or not context.Draw or not context.Info.Head then
             hideFeature(esp, state)
             return
         end
@@ -1680,41 +2246,41 @@ ESP:RegisterFeature("LookLine", {
             To = Vector2.new(b.X, b.Y),
             Color = context.Color,
             Alpha = context.Alpha,
-            Thickness = 1
+            Thickness = 1,
+            ZIndex = Z.Detail
         })
     end
 })
 
+-- OffscreenArrows: filled, outlined arrow on a ring around the screen centre.
 ESP:RegisterFeature("OffscreenArrows", {
     Order = 80,
     Create = function(_, _, state, esp)
-        state.Arrow = esp:CreateVisual("Triangle")
+        state.Arrow = esp:CreateVisual("Triangle", true)
     end,
     Update = function(_, target, state, context, esp)
-        if not esp:GetSetting(target, "OffscreenArrows") or not context.Visible or not context.Bounds or context.OnScreen then
+        if not esp:GetSetting(target, "OffscreenArrows") or not context.Visible or context.OnScreen or not context.Info.Root then
             hideFeature(esp, state)
             return
         end
         local camera = context.Camera
         local viewport = camera.ViewportSize
         local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
-        local root = context.Bounds.Root
-        local direction = root - center
-        if context.Bounds.RootDepth <= 0 then
-            direction = direction * -1
-        end
-        if direction.Magnitude < 1 then
+        -- Direction in camera space keeps arrows correct even when the target is behind us.
+        local relative = camera.CFrame:PointToObjectSpace(context.Info.Root.Position)
+        local direction = Vector2.new(relative.X, -relative.Y)
+        if direction.Magnitude < 0.001 then
             hideFeature(esp, state)
             return
         end
         direction = direction.Unit
-        local radius = esp:GetSetting(target, "ArrowRadius") or 280
-        local size = esp:GetSetting(target, "ArrowSize") or 16
-        local anchor = center + direction * math.min(radius, math.min(viewport.X, viewport.Y) * 0.45)
+        local radius = esp:GetSetting(target, "ArrowRadius") or 300
+        local size = esp:GetSetting(target, "ArrowSize") or 14
+        local anchor = center + direction * math.min(radius, math.min(viewport.X, viewport.Y) * 0.46)
         local perp = Vector2.new(-direction.Y, direction.X)
         local tip = anchor + direction * size
-        local left = anchor - direction * (size * 0.75) + perp * (size * 0.55)
-        local right = anchor - direction * (size * 0.75) - perp * (size * 0.55)
+        local left = anchor - direction * (size * 0.6) + perp * (size * 0.6)
+        local right = anchor - direction * (size * 0.6) - perp * (size * 0.6)
         esp:SetVisual(state.Arrow, {
             Visible = true,
             PointA = tip,
@@ -1723,11 +2289,13 @@ ESP:RegisterFeature("OffscreenArrows", {
             Color = context.Color,
             Alpha = context.Alpha,
             Filled = true,
-            Thickness = 1
+            Thickness = 1,
+            ZIndex = Z.Detail
         })
     end
 })
 
+-- Chams: Highlight-based fill and outline through walls.
 ESP:RegisterFeature("Chams", {
     Order = 90,
     Create = function()
@@ -1746,12 +2314,21 @@ ESP:RegisterFeature("Chams", {
             highlight.Parent = esp:GetScreenGui()
             state.Highlight = highlight
         end
-        state.Highlight.Adornee = context.Info.Model
-        state.Highlight.Enabled = true
-        state.Highlight.FillColor = context.Color
-        state.Highlight.OutlineColor = context.Color
-        state.Highlight.FillTransparency = esp:GetSetting(target, "ChamsFillTransparency") or 0.72
-        state.Highlight.OutlineTransparency = esp:GetSetting(target, "ChamsOutline") and (esp:GetSetting(target, "ChamsOutlineTransparency") or 0) or 1
+        local fillColor = esp:GetSetting(target, "ChamsFillColor")
+        local outlineColor = esp:GetSetting(target, "ChamsOutlineColor")
+        local highlight = state.Highlight
+        highlight.Adornee = context.Info.Model
+        highlight.Enabled = true
+        highlight.FillColor = typeof(fillColor) == "Color3" and fillColor or context.Color
+        highlight.OutlineColor = typeof(outlineColor) == "Color3" and outlineColor or context.Color
+        local fillTransparency = esp:GetSetting(target, "ChamsFillTransparency") or 0.6
+        highlight.FillTransparency = 1 - (1 - fillTransparency) * context.Fade
+        if esp:GetSetting(target, "ChamsOutline") then
+            local outlineTransparency = esp:GetSetting(target, "ChamsOutlineTransparency") or 0
+            highlight.OutlineTransparency = 1 - (1 - outlineTransparency) * context.Fade
+        else
+            highlight.OutlineTransparency = 1
+        end
     end,
     Destroy = function(_, _, state)
         if state.Highlight then
@@ -1760,6 +2337,10 @@ ESP:RegisterFeature("Chams", {
         end
     end
 })
+
+---------------------------------------------------------------------------
+-- Built-in provider
+---------------------------------------------------------------------------
 
 ESP:RegisterProvider("Players", {
     Start = function(provider, options)
@@ -1797,6 +2378,7 @@ ESP:RegisterProvider("Players", {
             for _, target in pairs(provider.Targets) do
                 provider.ESP:Untrack(target)
             end
+            provider.Targets = {}
         end
         provider.Started = false
     end
